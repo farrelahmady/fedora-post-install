@@ -478,7 +478,7 @@ Connect Beekeeper/DBeaver ke `localhost:5432` (compose Tahap 6), buka 1 diagram 
 ## Tahap 12 — Browser / Media / Util Lain
 
 ### Pemetaan Windows → Fedora
-* `Chrome 152 + Firefox 156 + Edge →` Firefox bawaan + Chrome via RPM (`google-chrome-stable`), Edge tidak perlu (pakai Chrome)
+* `Chrome 152 + Firefox 156 + Edge →` Firefox bawaan + Chrome via RPM (`google-chrome-stable`), Edge tidak perlu (pakai Chrome). Detail instalasi + VA-API Cezanne Vega: lihat `chrome-cezanne-vaapi.md`.
 * `OBS 32 →` Flatpak `com.obsproject.Studio`
 * `MPC-HC 1.7 →` VLC/Celluloid (Tahap 3)
 * `Spotify + Discord + WhatsApp →` Flatpak `Spotify/Discord`, WhatsApp via browser/Flatpak tidak resmi
