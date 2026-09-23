@@ -1,7 +1,7 @@
 # Fedora Post-Install — Migrasi Lengkap dari Windows + WSL (Coding + Office)
 
 > Target: Fedora Workstation (GNOME) di PC `MRPEPENG` — Ryzen 5 5500GT + Radeon iGPU (Cezanne 0x1638), A520M-HVS, 16GB RAM, NVMe Kingston SNV2S1000G, LAN Realtek 8168 + WiFi Broadcom 2.10, Dual monitor 1080p (HDMI AOC + DP-to-VGA), Audio AMD + Logi C270 + Mic USB MCN-10.
-> Varian: **Podman rootless (native Fedora)** + **Zsh 1:1 dari WSL**.
+> Varian: **Podman rootless (native Fedora)** + **Zsh 1:1 dari WSL + mise (bahasa via mise, bukan dnf)**.
 > Sumber inventaris: `DxDiag.txt` + `winget list` Windows 11 Home 26200 + WSL Ubuntu 26.04.1 (git 2.53, node v24.21 via nvm, python 3.14, java 21 + maven, dotnet SDK 10, go, gcc 15, docker 29.8 + postgres:16-alpine + redis:7-alpine dimigrasi ke Podman, VS Code 1.138 + 30 extensions).
 
 Cara pakai dokumen ini: ikuti tahap berurutan. Setiap tahap punya pola **Apa itu → Kegunaan untuk Anda → Instalasi → Verifikasi**.
@@ -86,11 +86,19 @@ Pengganti MPC-HC 1.7 + HEVC/AV1 Extension di Windows Anda. Agar video Zoom, MP4 
 
 ### Instalasi
 ```bash
+# Fedora bawaan ada ffmpeg-free -> harus swap ke ffmpeg RPM Fusion, bukan install dobel
+sudo dnf swap -y ffmpeg-free ffmpeg --allowerasing
 sudo dnf install -y ffmpeg \
-  gstreamer1-plugins-{bad-*,good-*,base} \
-  gstreamer1-plugin-openh264 gstreamer1-libav lame* \
+  "gstreamer1-plugins-bad-*" "gstreamer1-plugins-good-*" \
+  "gstreamer1-plugins-base" "gstreamer1-plugins-ugly-*" \
+  "gstreamer1-plugins-bad-freeworld*" \
+  gstreamer1-plugin-openh264 gstreamer1-libav "lame*" \
   --exclude=gstreamer1-plugins-bad-free-devel
-sudo dnf install -y vlc celluloid || flatpak install -y flathub org.videolan.VLC io.github.celluloid_player.Celluloid
+
+# Player (pisah, hindari duplikat dnf+flatpak)
+flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+sudo dnf install -y celluloid || echo "celluloid via dnf gagal, lanjut vlc"
+sudo dnf install -y vlc || flatpak install -y flathub org.videolan.VLC
 ```
 
 ### Verifikasi
@@ -115,15 +123,25 @@ Berbeda dengan Windows (download exe per vendor), 90% driver Linux ada di kernel
 ### Instalasi
 ```bash
 # Cek dulu (jangan langsung install membabi-buta)
-lspci | grep -iE "vga|network|audio|ethernet"
+sudo dnf install -y pciutils usbutils
+lspci | grep -iE "vga|3d|display|network|audio|ethernet"
 lsusb | grep -iE "logi|c270|wireless|broadcom"
 
-# Hanya jika lspci menunjukkan Broadcom wireless:
-sudo dnf install -y broadcom-wl akmod-wl
+# Hanya jika terdeteksi Broadcom (PCI maupun USB):
+sudo dnf install -y akmod-wl broadcom-wl
+# Jika Secure Boot AKTIF: butuh MOK enroll setelah reboot (ikuti prompt biru MOK).
+# akmod butuh 2-5 menit build setelah reboot. Cek: modinfo wl
 sudo reboot
 
-# Firmware umum (AMD microcode + linux-firmware sudah bawaan, pastikan):
-sudo dnf install -y linux-firmware amd-ucode-firmware 2>/dev/null || true
+# Firmware umum (sudah bawaan kernel, pastikan ada):
+sudo dnf install -y linux-firmware
+# CPU AMD: amd-ucode-firmware / CPU Intel: microcode_ctl (biasanya sudah bawaan)
+
+# GPU (pilih sesuai hasil lspci, jangan semua):
+# AMD -> sudo dnf install -y mesa-vulkan-drivers xorg-x11-drv-amdgpu   # in-kernel amdgpu+Mesa
+# Intel -> sudo dnf install -y mesa-vulkan-drivers intel-media-driver
+# Nvidia -> MANUAL, pilih satu: sudo dnf install -y akmod-nvidia (proprietary + MOK jika Secure Boot),
+#           atau biarkan nouveau open-source (tanpa install apa-apa). Script TIDAK auto-install Nvidia.
 ```
 
 Catatan monitor `DP2VGA V235` Anda: native 1024x768 dipaksa 1080p via konverter aktif. Kalau di `Settings → Displays` resolusi aneh, set manual ke 1920x1080@60 atau 1024x768 native.
@@ -145,11 +163,11 @@ nmcli device status                 # wifi/ethernet connected
 Fedora punya 2 jalur: `DNF/RPM` untuk system (kernel, driver, toolchain) dan `Flatpak/Flathub` untuk app desktop terisolasi (seperti MS Store, tapi open). Jangan campur keduanya untuk app yang sama.
 
 ### Kegunaan untuk Anda
-Aturan main: toolchain coding via DNF (Tahap 7), app desktop (OnlyOffice, OBS, DBeaver, Spotify, Discord) via Flatpak agar tidak merusak base dan mudah rollback.
+Aturan main: base tools dev via DNF (Tahap 8), app desktop (OnlyOffice, DBeaver, Chrome via RPM di Tahap 12) dipisah agar tidak merusak base dan mudah rollback. Flatpak untuk app desktop terisolasi, DNF/RPM untuk system.
 
 ### Instalasi
 ```bash
-flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 flatpak update -y
 sudo dnf install -y gnome-software gnome-tweaks extension-manager
 ```
@@ -180,16 +198,12 @@ sudo dnf remove -y docker-ce docker-ce-cli 2>/dev/null || true
 
 # Socket user untuk Testcontainers / Dev Containers / API kompatibel Docker
 systemctl --user enable --now podman.socket
-loginctl enable-linger $USER
-echo $XDG_RUNTIME_DIR/podman/podman.sock
-ls -l $XDG_RUNTIME_DIR/podman/podman.sock
-
-# Opsional: alias agar muscle-memory `docker` tetap jalan
-echo 'alias docker=podman' >> ~/.zshrc
-
-# Autostart DB via systemd (pengganti `systemctl enable docker`)
-mkdir -p ~/dev-db
+loginctl enable-linger "${USER}"
+ls -l "$XDG_RUNTIME_DIR/podman/podman.sock"
+# Untuk Testcontainers/Dev Containers: export DOCKER_HOST=unix://$XDG_RUNTIME_DIR/podman/podman.sock
 ```
+
+> Catatan (tidak di-install script, opsional manual): alias `docker=podman` di `~/.zshrc`, compose DB `~/dev-db/docker-compose.yml` (`postgres:16-alpine + redis:7-alpine` dengan label `:Z`), dan autostart via `podman generate systemd` — lihat contoh di bawah.
 
 Contoh compose sesuai WSL Anda (`~/dev-db/docker-compose.yml`, dipakai via `podman compose`):
 ```yaml
@@ -292,59 +306,13 @@ Rekomendasi untuk Anda: tetap Podman untuk harian (alasan keamanan + maintenance
 
 ---
 
-## Tahap 7 — Toolchain Coding (Samakan dengan WSL)
+## Tahap 7 — Zsh 1:1 dari WSL (Oh My Zsh + pengshell + mise)
 
 ### Apa itu?
-Compiler/interpreter + build tools + package manager untuk stack Anda (Java/Spring, Go, .NET, Node, Python).
+Zsh + Oh My Zsh adalah shell interaktif + framework theme/plugin. Theme `pengshell` Anda ada di `~/.oh-my-zsh/themes/`. Plugin community (`zsh-autosuggestions`, `zsh-syntax-highlighting`) ada di `custom/plugins`. `mise` adalah version manager pengganti `nvm/sdkman` — bahasa (node/python/java/go/dotnet) di-install belakangan via `mise`, bukan via `dnf` di tahap ini.
 
 ### Kegunaan untuk Anda
-Mereplikasi WSL Ubuntu 26.04 Anda di Fedora. Perbedaan utama: Fedora pakai `dnf`, Python `pip` terpisah, path JVM beda (`/usr/lib/jvm/java-21-openjdk`, bukan `-amd64`), Go via dnf di `/usr/bin` bukan `/usr/local/go/bin`.
-
-### Instalasi
-```bash
-sudo dnf install -y git gh gcc make vim neovim direnv \
-  python3 python3-pip \
-  java-21-openjdk java-21-openjdk-devel maven gradle \
-  golang gopls \
-  curl wget unzip p7zip
-
-# Node via nvm (sama persis dengan WSL v24.21.0)
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
-export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-nvm install 24.21.0
-nvm alias default 24.21.0
-npm i -g yarn
-
-# .NET 10 via repo Microsoft (samakan dengan SDK 10.0.112 di WSL)
-sudo rpm --import https://packages.microsoft.com/keys/microsoft.asc
-sudo dnf install -y https://packages.microsoft.com/config/fedora/$(rpm -E %fedora)/packages-microsoft-prod.rpm
-sudo dnf install -y dotnet-sdk-10.0
-
-# Verifikasi versi samakan dengan WSL
-git --version        # WSL: 2.53.0
-node -v; npm -v      # WSL: v24.21.0 / 11.19.0
-python3 --version    # WSL: 3.14.4
-java -version        # WSL: 21.0.12
-mvn -v; gradle -v
-go version
-dotnet --list-sdks   # WSL: 10.0.112
-gcc --version; make --version
-```
-
-### Verifikasi
-Clone 1 repo Java/Spring + 1 repo Go/Node Anda, `mvn compile`, `go build ./...`, `npm ci`, `dotnet build`, `podman compose up` DB-nya.
-
----
-
-## Tahap 8 — Zsh 1:1 dari WSL (Oh My Zsh + pengshell)
-
-### Apa itu?
-Zsh + Oh My Zsh adalah shell interaktif + framework theme/plugin. Theme `pengshell` Anda ada di `~/.oh-my-zsh/themes/`. Plugin community (`zsh-autosuggestions`, `zsh-syntax-highlighting`) ada di `custom/plugins`.
-
-### Kegunaan untuk Anda
-Membawa 26 plugins WSL (`git docker docker-compose kubectl helm terraform aws gcloud azure ansible python pip node npm yarn golang rust sudo extract z history command-not-found vscode`), history 10000 + `SHARE_HISTORY`, alias `zshconfig/reload`, PATH `nvm/go/opencode` agar muscle-memory sama.
-
-Tidak 100% copy-paste karena `JAVA_HOME` Ubuntu (`.../java-21-openjdk-amd64`) beda dengan Fedora (`.../java-21-openjdk`).
+Membawa 26 plugins WSL (`git docker docker-compose kubectl helm terraform aws gcloud azure ansible python pip node npm yarn golang rust sudo extract z history command-not-found vscode`), history 10000 + `SHARE_HISTORY`, alias `zshconfig/reload`, agar muscle-memory sama. `mise` di-activate di zsh supaya perintah bahasa yang di-install belakangan langsung tersedia di PATH.
 
 ### Instalasi
 ```bash
@@ -352,75 +320,83 @@ sudo dnf install -y zsh git curl util-linux-user
 sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
 git clone https://github.com/zsh-users/zsh-autosuggestions ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-autosuggestions
 git clone https://github.com/zsh-users/zsh-syntax-highlighting ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-syntax-highlighting
+
+# mise ke zsh (pengganti nvm; bahasa di-install belakangan via `mise use -g`)
+curl -fsSL https://mise.run/zsh | sh
+
 chsh -s $(which zsh)
 ```
 
-Lalu copy `~/.zshrc` dari WSL dengan 2 edit wajib:
-```diff
-- ZSH_THEME="pengshell"   # tetap, file sudah ada di themes/
-- plugins=(git docker docker-compose kubectl helm terraform aws gcloud azure ansible python pip node npm yarn golang rust sudo extract z history command-not-found vscode zsh-autosuggestions zsh-syntax-highlighting)
-- export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
-+ export JAVA_HOME=/usr/lib/jvm/java-21-openjdk
-- export PATH="$PATH:/usr/local/go/bin"
-+ # hapus baris /usr/local/go/bin jika go via dnf (sudah di /usr/bin), pertahankan $HOME/go/bin
-  export PATH="$PATH:$HOME/go/bin"
-  export NVM_DIR="$HOME/.nvm"
-  [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+Lalu copy `~/.zshrc` dari WSL, pastikan ada aktivasi mise:
+```bash
+eval "$(mise activate zsh)"
 ```
+Bahasa (node/python/java/go/dotnet) BELUM di-install di sini — pakai `mise` belakangan, misal `mise use -g node@lts python@latest go@latest java@temurin-25`.
 
 ### Verifikasi
 ```bash
 echo $SHELL; echo $ZSH_THEME
 omz plugin list | tr ' ' '\n' | grep -E "autosuggest|syntax|docker|golang"
-# ketik `git sta` + TAB, ketik `podman ps` tanpa sudo (atau `docker ps` jika alias aktif), restart terminal cek history tetap ada
+command -v mise && mise --version
+# ketik `git sta` + TAB, restart terminal cek history tetap ada
 ```
 
 > Oh-my-posh di `AppData/.../oh-my-posh` Windows tidak dibawa — yang dibawa adalah Oh My Zsh WSL sesuai permintaan.
 
 ---
 
-## Tahap 9 — VS Code + Extensions (Samakan 1.138)
+## Tahap 8 — Base Tools Dev (tanpa bahasa, bahasa via mise belakangan)
 
 ### Apa itu?
-VS Code via repo resmi Microsoft (DNF), bukan Flatpak, agar `code` CLI + Podman/Testcontainers integrasi mulus. Extensions disync via Settings Sync atau install manual dari daftar WSL.
+Tool build dasar + CLI pendukung coding, TANPA compiler/interpreter bahasa. Bahasa sengaja tidak di-install via `dnf` agar tidak dobel dengan `mise` (Tahap 7).
 
 ### Kegunaan untuk Anda
-Daftar extensions WSL Anda yang wajib dibawa: `Go, Java Pack (redhat.java, spring-boot, maven, gradle, debug, test), C# DevKit + pack, Jupyter pack, Prettier, GitLens, REST Client, LiveServer, Path Intellisense, Rainbow CSV, Import Cost, Indent Rainbow`.
+`git/gh` untuk repo, `gcc/make` untuk build native, `vim/direnv` untuk edit + env per-project, `curl/wget/unzip/p7zip` untuk unduh/arsip. Semua bahasa (node/python/java/go/dotnet) menyusul via `mise use -g`.
+
+### Instalasi
+```bash
+sudo dnf install -y git gh gcc make vim direnv \
+  curl wget unzip p7zip p7zip-plugins
+```
+
+### Verifikasi
+```bash
+git --version; gh --version
+gcc --version; make --version
+mise --version
+# bahasa belum ada di sini (normal): command -v node python3 java go dotnet || echo "belum di-install, pakai mise"
+```
+
+---
+
+## Tahap 9 — VS Code
+
+### Apa itu?
+VS Code via repo resmi Microsoft (DNF), bukan Flatpak, agar `code` CLI + Podman/Testcontainers integrasi mulus. Extensions TIDAK di-install script — pakai Settings Sync setelah login.
+
+### Kegunaan untuk Anda
+Editor utama untuk project Spring/Go/.NET/Node. Install dari repo resmi agar update ikut `dnf upgrade`.
 
 ### Instalasi
 ```bash
 sudo rpm --import https://packages.microsoft.com/keys/microsoft.asc
 sudo sh -c 'echo -e "[code]\nname=Visual Studio Code\nbaseurl=https://packages.microsoft.com/yumrepos/vscode\nenabled=1\ngpgcheck=1\ngpgkey=https://packages.microsoft.com/keys/microsoft.asc" > /etc/yum.repos.d/vscode.repo'
 sudo dnf install -y code
-code --version  # samakan 1.138.0
-
-# Login Settings Sync di VS Code, atau manual:
-code --install-extension golang.go
-code --install-extension redhat.java
-code --install-extension vmware.vscode-spring-boot
-code --install-extension vscjava.vscode-maven
-code --install-extension vscjava.vscode-gradle
-code --install-extension ms-dotnettools.csdevkit
-code --install-extension ms-toolsai.jupyter
-code --install-extension esbenp.prettier-vscode
-code --install-extension eamodio.gitlens
-code --install-extension humao.rest-client
-code --install-extension ritwickdey.liveserver
-code --list-extensions | wc -l
+code --version
 ```
 
 ### Verifikasi
-Buka project Spring + Go + .NET Anda, pastikan Java LS + Gopls + C# DevKit tidak error, `Dev Containers: Reopen in Container` pakai Podman socket (`DOCKER_HOST` Tahap 6).
+Buka 1 project Anda, login Settings Sync untuk mengembalikan extensions. `Dev Containers: Reopen in Container` pakai Podman socket (`DOCKER_HOST` Tahap 6).
 
 ---
 
-## Tahap 10 — Office (Pengganti LTSC 2024 + Acrobat + OneDrive)
+## Tahap 10 — Office (OnlyOffice + Font MS)
 
 ### Apa itu?
-MS Office LTSC 2024 + Acrobat Pro tidak ada versi Linux. Pengganti: OnlyOffice (kompatibilitas .docx/.xlsx terbaik), LibreOffice (bawaan, cadangan), font MS, `rclone/OneDriver` untuk OneDrive, Thunderbird untuk Outlook, Xournal++ untuk annotasi PDF.
+MS Office LTSC tidak ada versi Linux. Pengganti yang di-install script: OnlyOffice (kompatibilitas `.docx/.xlsx` terbaik agar rapi dibuka di Word) + font MS agar dokumen tidak berantakan. Tidak termasuk client OneDrive/Email/PDF annotasi — di luar scope script ini.
 
 ### Kegunaan untuk Anda
-Anda dari Office LTSC + Teams + Outlook + OneDrive 26 + Adobe Acrobat Pro 25 + 365 Copilot. 90% kerja ketik-baca-print aman, 10% (macro VBA, template pixel-perfect, sync otomatis, edit PDF berat, Copilot di desktop) tidak akan 1:1.
+90% kerja ketik-baca-print aman. 10% (macro VBA, template pixel-perfect) tidak akan 1:1 — itu batas yang diterima.
 
 ### Instalasi
 ```bash
@@ -431,90 +407,94 @@ flatpak install -y flathub org.onlyoffice.desktopeditors
 sudo dnf install -y curl cabextract xorg-x11-font-utils fontconfig
 sudo rpm -i https://downloads.sourceforge.net/project/mscorefonts2/rpms/msttcore-fonts-installer-2.6-1.noarch.rpm
 fc-cache -f; fc-list | grep -i -E "calibri|cambria|arial|times" | head
-
-# OneDrive (tidak ada client resmi, pilih satu)
-sudo dnf install -y rclone
-# rclone config  # ikuti wizard onedrive, lalu: rclone mount onedrive: ~/OneDrive --vfs-cache-mode writes &
-# alternatif GUI: OneDriver dari COPR
-
-# Email + PDF annotasi
-sudo dnf install -y thunderbird
-flatpak install -y flathub com.github.xournalpp.xournalpp
 ```
 
 ### Verifikasi
-Buka 1 `.docx` + 1 `.xlsx` tersulit Anda di OnlyOffice, cek font + tabel + print 1 halaman ke PDF. Setup `rclone ls onedrive:` jalan. Catatan: folder `KMSpico/` di Windows tidak relevan — semua di sini gratis legal.
+Buka 1 `.docx` + 1 `.xlsx` tersulit Anda di OnlyOffice, cek font + tabel + print 1 halaman ke PDF.
 
 ---
 
-## Tahap 11 — DB & Util Dev (Pengganti TablePlus dkk)
+## Tahap 11 — DB (DBeaver saja)
 
 ### Apa itu?
-Tool database + API + diagram Anda. Satu yang harus dibuang: TablePlus (tidak ada Linux).
+DBeaver Community (Flatpak) sebagai GUI database pengganti TablePlus (TablePlus tidak ada versi Linux — dibuang, bukan di-install).
 
-### Kegunaan / Pemetaan
-* `TablePlus 6.5 → BUANG`, pakai `Beekeeper 5.3 + DBeaver 25 + pgAdmin 9.4` yang sudah Anda punya (ketiganya ada Linux)
-* `Apidog 2.8 + Postman 11.47 →` Apidog AppImage + Postman tar/Flatpak tidak resmi, atau pindah ke `Bruno` (Flatpak, Git-friendly)
-* `draw.io 27 →` Flatpak `draw.io`
-* `Figma Desktop →` browser + Figma Agent Linux
-* `Tesseract 5.5 →` `dnf install tesseract-ocr + tesseract-ocr-osd -l ind+eng`
-* `Notion 7.6 →` browser / Flatpak tidak resmi (tidak ada native Linux)
-* `ChatGPT Classic →` browser
+### Kegunaan untuk Anda
+Connect ke `postgres:16-alpine + redis:7-alpine` dari compose Podman Tahap 6. Tool DB lain (Beekeeper/pgAdmin/draw.io/tesseract) TIDAK di-install script — di luar scope.
 
 ### Instalasi
 ```bash
-flatpak install -y flathub io.beekeeperstudio.Studio org.dbeaver.DBeaverCommunity
-sudo dnf install -y pgadmin4 2>/dev/null || flatpak install -y flathub org.pgadmin.pgadmin4 2>/dev/null || echo "pgAdmin via web/podman jika gagal"
-flatpak install -y flathub com.jgraph.drawio.desktop
-sudo dnf install -y tesseract tesseract-osd
-flatpak install -y flathub com.usebottles.bottles 2>/dev/null || true  # opsional, bukan untuk Office
+flatpak install -y flathub org.dbeaver.DBeaverCommunity
 ```
 
 ### Verifikasi
-Connect Beekeeper/DBeaver ke `localhost:5432` (compose Tahap 6), buka 1 diagram draw.io, `tesseract --list-langs | grep ind`.
+Connect DBeaver ke `localhost:5432` (compose Tahap 6 jalan).
 
 ---
 
-## Tahap 12 — Browser / Media / Util Lain
+## Tahap 12 — Chrome RPM + VA-API Cezanne
 
-### Pemetaan Windows → Fedora
-* `Chrome 152 + Firefox 156 + Edge →` Firefox bawaan + Chrome via RPM (`google-chrome-stable`), Edge tidak perlu (pakai Chrome). Detail instalasi + VA-API Cezanne Vega: lihat `chrome-cezanne-vaapi.md`.
-* `OBS 32 →` Flatpak `com.obsproject.Studio`
-* `MPC-HC 1.7 →` VLC/Celluloid (Tahap 3)
-* `Spotify + Discord + WhatsApp →` Flatpak `Spotify/Discord`, WhatsApp via browser/Flatpak tidak resmi
-* `7-Zip 24 →` `p7zip + File Roller bawaan`
-* `IDM 6.43 →` Free Download Manager Flatpak / `aria2c`
-* `Logi Options+ →` `Solaar` (terbatas, tidak semua preset jalan): `sudo dnf install -y solaar`
-* `DroidCam 6.5 →` client Linux `droidcam` + `v4l2loopback`
-* `Cloudflare WARP 26 →` repo Cloudflare Linux `warp-cli`
-* `Google Drive 131 →` `Settings → Online Accounts → Google` (Nautilus ter-mount otomatis)
-* `Rufus →` Fedora Media Writer / Popsicle (untuk bikin USB installer lain)
-* `TradingView + Stockbit →` browser
-* `Steam + AoE III/ETS2/Shank2 →` `flatpak install flathub com.valvesoftware.Steam` + aktifkan Proton; `SMASH LEGENDS/MTG Arena/Denuvo` kemungkinan gagal anti-cheat — cek `protondb.com` dulu
+### Apa itu?
+Chrome via repo RPM resmi Google, bukan Flatpak. Alasan: Flatpak portal sering bikin masalah mic, screen-share Wayland, dan `chrome://gpu` fallback ke software (SwANGLE). VA-API agar decode H.264/HEVC/VP9 lewat GPU (hemat CPU/baterai). Detail penuh: lihat `chrome-cezanne-vaapi.md`.
 
-### Instalasi contoh
+### Kegunaan untuk Anda
+Browser utama + update ikut `dnf upgrade`. Driver VA-API dipilih sesuai GPU — jangan install semua sekaligus. AMD Cezanne Vega tidak punya decoder AV1 hardware (normal, batas hardware) → YouTube AV1 fallback CPU kecuali dipaksa H.264/VP9 via extension `enhanced-h264ify`.
+
+### Instalasi
 ```bash
-flatpak install -y flathub com.obsproject.Studio com.spotify.Client com.discordapp.Discord
-sudo dnf install -y p7zip p7zip-plugins solaar aria2
-flatpak install -y flathub com.valvesoftware.Steam
+sudo dnf install -y fedora-workstation-repositories
+
+# Fedora 41+ (DNF5):
+sudo dnf config-manager setopt google-chrome.enabled=1
+# Kalau DNF4 lama:
+# sudo dnf config-manager --set-enabled google-chrome
+# Fallback Spin tanpa fedora-workstation-repositories: tulis /etc/yum.repos.d/google-chrome.repo manual
+# (baseurl=https://dl.google.com/linux/chrome/rpm/stable/x86_64, gpgkey=linux_signing_key.pub)
+
+sudo dnf install -y google-chrome-stable
+
+# VA-API base (semua GPU):
+sudo dnf install -y libva libva-utils ffmpeg-libs
+
+# Pilih SATU sesuai GPU:
+sudo dnf install -y mesa-va-drivers-freeworld   # AMD Cezanne Vega (swap dari mesa-va-drivers bila perlu)
+# sudo dnf install -y intel-media-driver         # Intel gen 8+/Xe/Arc (jangan campur dengan paket AMD)
+```
+
+Flag Chrome permanen via override `~/.local` (awet `dnf upgrade`, per-user — jangan edit `/usr/share/applications/` milik RPM):
+```bash
+cp /usr/share/applications/google-chrome.desktop ~/.local/share/applications/
+# Semua baris Exec= jadi:
+# Exec=/usr/bin/google-chrome-stable --ozone-platform=wayland --enable-features=AcceleratedVideoDecodeLinuxGL,AcceleratedVideoDecodeLinuxZeroCopyGL %U
+# Lalu killall chrome / logout agar reload.
+# Troubleshoot F44: tambah --render-node-override=/dev/dri/renderD128
 ```
 
 ### Verifikasi
-Test meeting browser (mic MCN-10 + C270 + share-screen Wayland), putar Spotify, login Discord, buka Steam 1 game ringan.
+```bash
+google-chrome-stable --version
+dnf repolist | grep -i chrome
+vainfo | grep VAProfile   # AMD Vega: H264/HEVCMain/VP9 ada, AV1 tidak ada = normal
+# chrome://gpu → Video Decode: Hardware accelerated
+# chrome://media-internals (video H.264/VP9) → VaapiVideoDecoder, kIsPlatformVideoDecoder: true
+```
 
 ---
 
 ## Tahap 13 — Validasi Akhir + Tabel Gap Jujur
 
-### Checklist 15 menit (jangan skip)
+### Checklist 15 menit (jangan skip, sama dengan verifikasi script)
 ```bash
 nmcli device status; glxinfo | grep renderer; wpctl status
-podman compose -f ~/dev-db/docker-compose.yml ps
-# pembanding Docker (jika pakai varian alternatif Tahap 6b): docker compose -f ~/dev-db/docker-compose.yml ps
-code --list-extensions | grep -E "golang|redhat|dotnet|jupyter|gitlens"
+ffmpeg -version | head -n 1
+dnf repolist | grep -iE "rpmfusion|chrome"
+google-chrome-stable --version
+vainfo | grep -E "VAProfile|va_openDriver" | head -n 20
+code --version
+podman --version
 fc-list | grep -ci "microsoft\|calibri"
 ```
-Manual: suspend/wake, brightness, audio in/out, print 1 halaman, buka `.xlsx` kompleks, `git clone + podman compose up` 1 project.
+Manual: suspend/wake, brightness, audio in/out, print 1 halaman, buka `.xlsx` kompleks, `mise --version`, `git clone` 1 project.
 
 ### Tabel gap (harus diterima)
 | Windows Anda | Fedora | Status |
@@ -522,7 +502,7 @@ Manual: suspend/wake, brightness, audio in/out, print 1 halaman, buka `.xlsx` ko
 | Office LTSC macro VBA, template pixel-perfect | OnlyOffice/LibreOffice | 90% OK, macro kompleks pecah |
 | OneDrive sync otomatis | rclone/OneDriver/browser | Tidak 1:1 |
 | Acrobat Pro edit berat | Evince/Xournal++ | Baca/annotasi OK, edit berat tidak |
-| TablePlus | Beekeeper/DBeaver | Ganti, bukan install |
+| TablePlus | DBeaver (Tahap 11) | Ganti, bukan install |
 | Logi Options+ penuh | Solaar terbatas | Sebagian |
 | Game Denuvo/SMASH/MTG Arena | Proton | Kemungkinan gagal |
 | IDM, Samsung Flow, Phone Link | FDM/browser/KDE Connect | Ganti |
