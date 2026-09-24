@@ -104,6 +104,8 @@ sudo pacman -Syu
 
 # paru sudah bawaan CachyOS — verifikasi, jangan install yay dobel
 command -v paru && paru --version
+# Jika paru tidak ada
+# sudo pacman -S paru
 # Update sistem + AUR ke depan cukup:
 # sudo pacman -Syu      # repo resmi saja
 # paru -Syu             # repo resmi + AUR
