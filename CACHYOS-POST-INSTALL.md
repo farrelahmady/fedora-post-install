@@ -496,7 +496,7 @@ Connect ke `postgres:16-alpine + redis:7-alpine` dari compose Docker Tahap 6. To
 
 ### Instalasi
 ```bash
-flatpak install -y flathub org.dbeaver.DBeaverCommunity
+flatpak install -y flathub io.dbeaver.DBeaverCommunity
 ```
 
 ### Verifikasi
