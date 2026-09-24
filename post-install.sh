@@ -142,6 +142,8 @@ log "Tahap 6: podman rootless + docker compat"
 # Podman sudah bawaan Fedora, pastikan lengkap + kompatibilitas Docker CLI
 sudo dnf install -y podman podman-compose podman-docker buildah container-selinux || warn "install podman gagal sebagian, lanjut."
 sudo dnf remove -y docker-ce docker-ce-cli 2>/dev/null || true
+# Bungkam notice "Emulate Docker CLI using podman" dari paket podman-docker
+sudo mkdir -p /etc/containers && sudo touch /etc/containers/nodocker || warn "gagal menulis /etc/containers/nodocker."
 
 # Socket user untuk Testcontainers / Dev Containers / API kompatibel Docker
 if systemctl --user enable --now podman.socket 2>/dev/null; then
@@ -159,8 +161,8 @@ else
 fi
 
 # --- Tahap 7 — Zsh 1:1 dari WSL (Oh My Zsh + pengshell + mise) ---
-log "Tahap 7: zsh + oh-my-zsh + mise"
-sudo dnf install -y zsh git curl util-linux-user || warn "install zsh gagal sebagian."
+log "Tahap 7: zsh + oh-my-zsh + fzf standalone + mise"
+sudo dnf install -y zsh git curl util-linux-user fzf || warn "install zsh/fzf gagal sebagian."
 if [[ ! -d "$HOME/.oh-my-zsh" ]]; then
   sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended || warn "oh-my-zsh gagal, lanjut."
 else
@@ -176,6 +178,13 @@ if [[ ! -d "$ZSH_CUSTOM_DIR/plugins/zsh-syntax-highlighting" ]]; then
   git clone https://github.com/zsh-users/zsh-syntax-highlighting "$ZSH_CUSTOM_DIR/plugins/zsh-syntax-highlighting" || warn "clone syntax-highlighting gagal."
 else
   echo "zsh-syntax-highlighting sudah ada, skip."
+fi
+# fzf-tab standalone (tanpa plugin oh-my-zsh, di-source manual dari .zshrc sesudah compinit)
+if [[ ! -d "$HOME/.local/share/zsh/plugins/fzf-tab" ]]; then
+  mkdir -p "$HOME/.local/share/zsh/plugins"
+  git clone https://github.com/Aloxaf/fzf-tab "$HOME/.local/share/zsh/plugins/fzf-tab" || warn "clone fzf-tab gagal."
+else
+  echo "fzf-tab sudah ada, skip."
 fi
 # mise (pengganti nvm/sdkman/dnf bahasa; bahasa di-install belakangan via `mise use -g`)
 if ! command -v mise >/dev/null 2>&1; then

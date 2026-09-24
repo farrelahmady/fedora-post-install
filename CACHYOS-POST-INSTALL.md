@@ -1,8 +1,8 @@
 # CachyOS Post-Install — Migrasi Lengkap dari Windows + WSL (Coding + Office)
 
 > Target: CachyOS (disarankan **GNOME Edition** agar 1:1 dengan dokumen Fedora Anda) di PC `MRPEPENG` — Ryzen 5 5500GT + Radeon iGPU (Cezanne 0x1638), A520M-HVS, 16GB RAM, NVMe Kingston SNV2S1000G, LAN Realtek 8168 + WiFi Broadcom 2.10, Dual monitor 1080p (HDMI AOC + DP-to-VGA), Audio AMD + Logi C270 + Mic USB MCN-10.
-> Varian: **Podman rootless + Zsh 1:1 dari WSL + mise (bahasa via mise, bukan pacman)** — sama seperti varian Fedora Anda.
-> Sumber inventaris: `DxDiag.txt` + `winget list` Windows 11 Home 26200 + WSL Ubuntu 26.04.1 (git 2.53, node v24.21 via nvm, python 3.14, java 21 + maven, dotnet SDK 10, go, gcc 15, docker 29.8 + postgres:16-alpine + redis:7-alpine dimigrasi ke Podman, VS Code 1.138 + 30 extensions).
+> Varian: **Docker via pacman + Zsh 1:1 dari WSL + mise (bahasa via mise, bukan pacman)** — sama seperti varian Fedora Anda.
+> Sumber inventaris: `DxDiag.txt` + `winget list` Windows 11 Home 26200 + WSL Ubuntu 26.04.1 (git 2.53, node v24.21 via nvm, python 3.14, java 21 + maven, dotnet SDK 10, go, gcc 15, docker 29.8 + postgres:16-alpine + redis:7-alpine tetap pakai Docker, VS Code 1.138 + 30 extensions).
 > Basis dokumen ini: `README.md` Fedora Anda, diterjemahkan penuh ke Arch/CachyOS (`pacman + paru`, bukan `dnf + RPM Fusion`).
 
 Cara pakai dokumen ini: ikuti tahap berurutan. Setiap tahap punya pola **Apa itu → Kegunaan untuk Anda → Instalasi → Verifikasi**.
@@ -33,7 +33,7 @@ Persiapan sebelum install CachyOS menggantikan Windows. Meliputi backup, mematik
 Sama seperti Fedora: drive `C: 440GB + D: 512GB` hilang kalau salah partisi. Office LTSC + OneDrive tidak ada versi Linux-nya, file `.docx/.xlsx` + folder sync harus aman dulu. Uji Live satu-satunya cara memastikan WiFi Broadcom terdeteksi sebelum wipe.
 
 ### Instalasi
-1. Backup: Dokumen, `~/.ssh`, `.gitconfig`, compose file (`postgres:16-alpine + redis:7-alpine` untuk dipakai via `podman compose` — **hapus label `:Z` versi Fedora**), export VS Code Settings Sync ON, catat lisensi Office/IDM.
+1. Backup: Dokumen, `~/.ssh`, `.gitconfig`, compose file (`postgres:16-alpine + redis:7-alpine` untuk dipakai via `docker compose` — **hapus label `:Z` versi Fedora**), export VS Code Settings Sync ON, catat lisensi Office/IDM.
 2. Di Windows: matikan BitLocker (`Manage BitLocker → Turn off`), matikan Fast Startup (`Power Options → Choose what power buttons do → uncheck Fast Startup`).
 3. Download ISO dari `cachyos.org/download` → pilih **GNOME Edition** (agar 1:1 dengan dokumen Fedora; KDE juga boleh tapi nama paket software-center beda). Verifikasi checksum (SHA256 yang disediakan di halaman download), flash dengan **Ventoy** (disarankan CachyOS) / Fedora Media Writer / Rufus (mode DD).
 4. Boot Live USB → pilih `Boot CachyOS` → cek: LAN kabel jalan? WiFi muncul? Suara keluar? Kedua monitor tampil? Suspend/wake? Buka `cachy-hello` sekilas untuk lihat opsi installer.
@@ -237,13 +237,13 @@ flatpak list | head
 
 ---
 
-## Tahap 6 — Podman (Rootless, bukan bawaan seperti Fedora)
+## Tahap 6 — Docker (bukan bawaan, install via pacman)
 
 ### Apa itu?
-Podman di CachyOS **bukan bawaan** (seperti di Fedora) — install via `pacman`, perintah 95% kompatibel Docker. Perbedaan penting vs Fedora: **tanpa `container-selinux`, tanpa label `:Z`, tanpa `podman-docker` wajib** — volume langsung jalan, file milik user.
+Docker di CachyOS **bukan bawaan** — install via `pacman` dari repo `extra`, tanpa repo eksternal `download.docker.com` seperti di Fedora. Perbedaan penting vs Fedora: **tanpa `container-selinux`, tanpa label `:Z`** — volume langsung jalan.
 
 ### Kegunaan untuk Anda
-Menjalankan `postgres:16-alpine + redis:7-alpine` persis seperti di WSL, rootless, file volume milik user, update ikut `pacman -Syu`.
+Menjalankan `postgres:16-alpine + redis:7-alpine` persis seperti di WSL, update ikut `pacman -Syu`, kompatibel penuh dengan Testcontainers / Dev Containers tanpa setting `DOCKER_HOST` tambahan.
 
 > Catatan compose: hapus `:Z` dari file Fedora Anda. Di CachyOS/Arch `:Z` tidak dikenal dan bikin error.
 
@@ -252,12 +252,14 @@ Contoh compose CachyOS (`~/dev-db/docker-compose.yml`):
 services:
   postgres:
     image: docker.io/postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_PASSWORD: dev
     ports: ["5432:5432"]
     volumes: ["pgdata:/var/lib/postgresql/data"]
   redis:
     image: docker.io/redis:7-alpine
+    restart: unless-stopped
     ports: ["6379:6379"]
 volumes:
   pgdata:
@@ -265,90 +267,26 @@ volumes:
 
 ### Instalasi
 ```bash
-sudo pacman -S --needed podman podman-compose buildah
+sudo pacman -S --needed docker docker-compose
+sudo systemctl enable --now docker.service
+sudo usermod -aG docker "$USER"
+# relogin (atau newgrp docker) agar grup docker aktif tanpa sudo tiap perintah:
+newgrp docker || true
 
-# Socket user untuk Testcontainers / Dev Containers / API kompatibel Docker
-systemctl --user enable --now podman.socket
-loginctl enable-linger "${USER}"
-ls -l "$XDG_RUNTIME_DIR/podman/podman.sock"
-# Untuk Testcontainers/Dev Containers: export DOCKER_HOST=unix://$XDG_RUNTIME_DIR/podman/podman.sock
-
-podman run --rm hello-world
-podman compose -f ~/dev-db/docker-compose.yml up -d
-podman ps
-# autostart saat boot (opsional, setelah compose jalan):
-podman generate systemd --new --name dev-db-postgres-1 > ~/.config/systemd/user/postgres-dev.service
-systemctl --user daemon-reload
-systemctl --user enable --now postgres-dev.service
-```
-
-Untuk Testcontainers (Java/Spring) / VS Code Dev Containers set:
-```bash
-export DOCKER_HOST=unix://$XDG_RUNTIME_DIR/podman/podman.sock
-# di VS Code settings: "dev.containers.dockerPath": "podman"
+docker run --rm hello-world
+docker compose -f ~/dev-db/docker-compose.yml up -d
+docker ps
+# autostart DB sudah ditangani restart: unless-stopped + docker.service enable — tanpa systemd unit manual
 ```
 
 ### Verifikasi
 ```bash
-podman version
-podman compose version
-podman images | grep -E "postgres|redis"
-podman ps
+docker version
+docker compose version
+docker images | grep -E "postgres|redis"
+docker ps
 # dari Spring/Go/Node connect ke localhost:5432 + localhost:6379
 ```
-
----
-
-## Tahap 6b — Perbandingan: Jika Implement dengan Docker vs Podman
-
-> Jalur utama dokumen ini tetap **Podman** (Tahap 6). Bagian ini hanya pembanding jika Anda tetap mau Docker seperti di WSL.
-
-### Apa itu?
-Keduanya runtime OCI untuk image yang sama. Bedanya di CachyOS **jauh lebih kecil** dibanding di Fedora — karena Arch tidak punya SELinux dan Docker tersedia langsung di `extra` (tidak perlu repo eksternal `download.docker.com` seperti di Fedora).
-
-### Kegunaan untuk Anda
-Anda dari `docker 29.8` di WSL hanya untuk 2 DB dev:
-
-| Aspek | Docker | Podman | Dampak untuk Anda di CachyOS |
-|---|---|---|---|
-| Install | `sudo pacman -S docker docker-compose` (repo `extra`, tanpa repo eksternal) | `sudo pacman -S podman podman-compose` | Seri — keduanya sekali perintah |
-| Daemon | `dockerd` root, `/var/run/docker.sock` | Daemonless + rootless, `podman.socket` user | Podman menang keamanan laptop |
-| File volume | Milik `root`, kadang perlu `sudo chown` | Milik user langsung | Podman menang (`node_modules/target` aman) |
-| Compose file | `volumes: ["pgdata:/var/lib/postgresql/data"]` langsung jalan | Sama persis (tanpa `:Z`) | Seri — tidak ada adaptasi di CachyOS |
-| Autostart DB | `systemctl enable --now docker` | `podman generate systemd` + `systemctl --user enable` | Docker lebih simpel, Podman lebih granular |
-| Testcontainers + Dev Containers | Langsung jalan | Perlu `DOCKER_HOST=...podman.sock` + `"dev.containers.dockerPath": "podman"` | Docker menang kompatibilitas |
-| Port <1024 | Bisa | Tidak bisa rootless | Tidak relevan (5432/6379) |
-| Docs/SO | Sangat banyak | Lebih sedikit | Docker menang saat debug aneh |
-
-### Instalasi (side-by-side, pilih satu)
-
-**Jika Podman (jalur utama, sudah di Tahap 6):**
-```bash
-sudo pacman -S --needed podman podman-compose buildah
-systemctl --user enable --now podman.socket
-podman compose -f ~/dev-db/docker-compose.yml up -d
-```
-
-**Jika Docker (alternatif, persis WSL Anda — jauh lebih gampang di CachyOS dibanding Fedora):**
-```bash
-sudo pacman -S --needed docker docker-compose
-sudo systemctl enable --now docker
-sudo usermod -aG docker $USER
-newgrp docker || true
-docker run --rm hello-world
-docker compose -f ~/dev-db/docker-compose.yml up -d
-```
-
-### Verifikasi (keduanya harus hasil sama)
-```bash
-# Podman:
-podman compose -f ~/dev-db/docker-compose.yml ps
-# Docker (jika pilih alternatif):
-# docker compose -f ~/dev-db/docker-compose.yml ps
-# Keduanya: Spring/Go/Node connect ke localhost:5432 + localhost:6379
-```
-
-Rekomendasi untuk Anda: tetap Podman untuk harian (alasan keamanan + file milik user), ingat setting `DOCKER_HOST` hanya jika Testcontainers/Dev Containers protes. Pindah ke Docker hanya jika tim memaksa `docker compose` mentah tanpa toleransi beda perilaku — di CachyOS pindahnya murah (satu perintah pacman, tanpa repo eksternal).
 
 ---
 
@@ -362,10 +300,14 @@ Membawa 26 plugins WSL (`git docker docker-compose kubectl helm terraform aws gc
 
 ### Instalasi
 ```bash
-sudo pacman -S --needed zsh git curl
+sudo pacman -S --needed zsh git curl fzf
 sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
 git clone https://github.com/zsh-users/zsh-autosuggestions ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-autosuggestions
 git clone https://github.com/zsh-users/zsh-syntax-highlighting ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-syntax-highlighting
+
+# fzf-tab standalone (tanpa plugin oh-my-zsh, di-source manual dari .zshrc)
+mkdir -p ~/.local/share/zsh/plugins
+git clone https://github.com/Aloxaf/fzf-tab ~/.local/share/zsh/plugins/fzf-tab
 
 # mise ke zsh (pengganti nvm; bahasa di-install belakangan via `mise use -g`)
 curl -fsSL https://mise.run/zsh | sh
@@ -378,6 +320,21 @@ Lalu copy `~/.zshrc` dari WSL, pastikan ada aktivasi mise:
 eval "$(mise activate zsh)"
 ```
 Bahasa (node/python/java/go/dotnet) BELUM di-install di sini — pakai `mise` belakangan, misal `mise use -g node@lts python@latest go@latest java@temurin-25`.
+
+> Pola `.zshrc` untuk fzf (standalone, tanpa plugin oh-my-zsh): **jangan** taruh `fzf`/`fzf-tab` di `plugins=(...)`. Source manual sesudah `source $ZSH/oh-my-zsh.sh`:
+> ```zsh
+> # Arch/CachyOS: /usr/share/fzf/*.zsh (tanpa subfolder shell/ seperti Fedora)
+> if [[ -f /usr/share/fzf/key-bindings.zsh ]]; then
+>   source /usr/share/fzf/completion.zsh
+>   source /usr/share/fzf/key-bindings.zsh
+> elif command -v fzf >/dev/null 2>&1; then
+>   source <(fzf --zsh)
+> fi
+> [[ -f "$HOME/.local/share/zsh/plugins/fzf-tab/fzf-tab.plugin.zsh" ]] && source "$HOME/.local/share/zsh/plugins/fzf-tab/fzf-tab.plugin.zsh"
+> ```
+> `.zshrc` yang sama bisa dipakai di Fedora + CachyOS bila pakai pengecekan dua path (`shell/` vs langsung). `fzf-tab` wajib sesudah `compinit`. Verifikasi: `fzf --version`, `Ctrl-R`, `cd <Tab>` muncul popup + preview.
+>
+> Catatan CachyOS: tidak perlu `touch /etc/containers/nodocker` seperti di Fedora.
 
 > Oh-my-posh di `AppData/.../oh-my-posh` Windows tidak dibawa — yang dibawa adalah Oh My Zsh WSL sesuai permintaan.
 
@@ -407,11 +364,72 @@ sudo pacman -S --needed base-devel git github-cli gcc make vim direnv \
 
 Catatan nama paket Arch: `gh` = paket `github-cli`, `p7zip` lama = sekarang `7zip`. Kalau script lama Anda masih tulis `p7zip`, ganti ke `7zip`.
 
+### SSH GitHub personal + `gh` login (wajib sebelum clone repo privat)
+```bash
+# 1. Git identity personal (restore dari backup Tahap 0, atau set baru):
+git config --global user.name "Nama Personal Anda"
+git config --global user.email "email-personal-anda@example.com"
+
+# 2. Generate key personal — SKIP jika ~/.ssh/github-personal.pub sudah ada (hasil restore Tahap 0):
+mkdir -p ~/.ssh && chmod 700 ~/.ssh
+ls ~/.ssh/github-personal.pub || ssh-keygen -t ed25519 -C "email-personal-anda@example.com" -f ~/.ssh/github-personal
+chmod 600 ~/.ssh/github-personal
+chmod 644 ~/.ssh/github-personal.pub
+
+# 3. Config SSH — wajib karena nama key non-default (bukan id_ed25519):
+cat > ~/.ssh/config <<'EOF'
+Host github.com
+  HostName github.com
+  User git
+  IdentityFile ~/.ssh/github-personal
+  IdentitiesOnly yes
+  AddKeysToAgent yes
+EOF
+chmod 600 ~/.ssh/config
+
+# 4. Agent + load key untuk sesi ini:
+eval "$(ssh-agent -s)"
+ssh-add ~/.ssh/github-personal
+ssh-add -l
+
+# 5. Login gh (pilih: GitHub.com → SSH → Login with a web browser, ikuti kode one-time):
+gh auth login
+# 6. Upload public key personal ke GitHub via gh (tanpa buka browser manual):
+#    TITLE full-variable: os-user@host-personal → unik per mesin + user
+TITLE="$(. /etc/os-release && echo "$ID")-$(whoami)@$(hostname)-personal"
+echo "$TITLE"
+# contoh: cachyos-farrel@MRPEPENG-personal
+gh ssh-key add ~/.ssh/github-personal.pub --title "$TITLE"
+gh ssh-key list
+```
+
+> Kalau `gh auth login` gagal buka browser (minimal install / SSH remote), ulangi dengan `gh auth login --web -h github.com` atau tempel token klasik (`ghp_...`, scope `admin:public_key, repo, read:org`). Jangan simpan token di history — pakai 1x lalu `history -c`.
+
+> Jika bentrok — install ulang dengan hostname sama / title sudah ada — hapus key lama by title lalu add ulang (`gh ssh-key delete` butuh ID, bukan title, jadi ambil ID via API dulu):
+> ```bash
+> TITLE="$(. /etc/os-release && echo "$ID")-$(whoami)@$(hostname)-personal"
+> gh ssh-key list
+> # lihat ID dari title yang bentrok:
+> gh api user/keys --jq '.[] | "\(.id) \(.title)"' | grep -F "$TITLE"
+> KEY_ID=$(gh api user/keys --jq ".[] | select(.title==\"$TITLE\") | .id" | head -n1)
+> echo "ID lama: $KEY_ID"
+> [ -n "$KEY_ID" ] && gh ssh-key delete "$KEY_ID" --yes
+> gh ssh-key add ~/.ssh/github-personal.pub --title "$TITLE"
+> gh ssh-key list
+> ```
+> Jika error `key is already in use` (material key sudah terdaftar di title lain, misal hasil restore): list semua `gh api user/keys --jq '.[] | "\(.id) \(.title)"'`, hapus ID yang menampung key lama itu, baru add ulang.
+
+> Akun kedua (kerja) nanti: generate `~/.ssh/github-kerja`, tambah blok `Host github-kerja` + `HostName github.com` + `IdentityFile ~/.ssh/github-kerja` di `~/.ssh/config`, clone via `git@github-kerja:org/repo`. Jangan timpa blok `Host github.com` personal di atas.
+
 ### Verifikasi
 ```bash
 git --version; gh --version
 gcc --version; make --version
 mise --version
+gh auth status
+ssh -G github.com | grep -i identityfile
+ssh -T git@github.com 2>&1 | head -n 3
+# harus: "Hi USERNAME! You've successfully authenticated..."
 # bahasa belum ada di sini (normal): command -v node python3 java go dotnet || echo "belum di-install, pakai mise"
 ```
 
@@ -420,7 +438,7 @@ mise --version
 ## Tahap 9 — VS Code
 
 ### Apa itu?
-VS Code via **AUR (`visual-studio-code-bin`)**, bukan repo Microsoft manual seperti di Fedora, bukan Flatpak (agar `code` CLI + Podman/Testcontainers integrasi mulus). Update ikut `paru -Syu`. Extensions TIDAK di-install script — pakai Settings Sync setelah login.
+VS Code via **AUR (`visual-studio-code-bin`)**, bukan repo Microsoft manual seperti di Fedora, bukan Flatpak (agar `code` CLI + Docker/Testcontainers integrasi mulus). Update ikut `paru -Syu`. Extensions TIDAK di-install script — pakai Settings Sync setelah login.
 
 ### Kegunaan untuk Anda
 Editor utama untuk project Spring/Go/.NET/Node. Install dari AUR agar update ikut sistem rolling.
@@ -438,7 +456,7 @@ git clone https://aur.archlinux.org/paru.git /tmp/paru && cd /tmp/paru && makepk
 ```
 
 ### Verifikasi
-Buka 1 project Anda, login Settings Sync untuk mengembalikan extensions. `Dev Containers: Reopen in Container` pakai Podman socket (`DOCKER_HOST` Tahap 6).
+Buka 1 project Anda, login Settings Sync untuk mengembalikan extensions. `Dev Containers: Reopen in Container` langsung jalan via `/var/run/docker.sock` — tanpa setting `DOCKER_HOST` tambahan.
 
 ---
 
@@ -472,7 +490,7 @@ Buka 1 `.docx` + 1 `.xlsx` tersulit Anda di OnlyOffice, cek font + tabel + print
 DBeaver Community (Flatpak) sebagai GUI database pengganti TablePlus (TablePlus tidak ada versi Linux — dibuang). Identik dengan Fedora.
 
 ### Kegunaan untuk Anda
-Connect ke `postgres:16-alpine + redis:7-alpine` dari compose Podman Tahap 6. Tool DB lain (Beekeeper/pgAdmin/draw.io/tesseract) TIDAK di-install — di luar scope.
+Connect ke `postgres:16-alpine + redis:7-alpine` dari compose Docker Tahap 6. Tool DB lain (Beekeeper/pgAdmin/draw.io/tesseract) TIDAK di-install — di luar scope.
 
 ### Instalasi
 ```bash
@@ -537,7 +555,8 @@ grep -v "^#" /etc/pacman.conf | grep "^\[" | head -n 20
 google-chrome-stable --version
 vainfo | grep -E "VAProfile|va_openDriver" | head -n 20
 code --version
-podman --version
+docker --version
+docker compose version
 fc-list | grep -ci "microsoft\|calibri"
 uname -r   # pastikan -cachyos
 snapper list 2>/dev/null | head || sudo snapper list | head

@@ -200,6 +200,8 @@ sudo dnf remove -y docker-ce docker-ce-cli 2>/dev/null || true
 systemctl --user enable --now podman.socket
 loginctl enable-linger "${USER}"
 ls -l "$XDG_RUNTIME_DIR/podman/podman.sock"
+# Bungkam notice "Emulate Docker CLI using podman" dari paket podman-docker
+sudo mkdir -p /etc/containers && sudo touch /etc/containers/nodocker
 # Untuk Testcontainers/Dev Containers: export DOCKER_HOST=unix://$XDG_RUNTIME_DIR/podman/podman.sock
 ```
 
@@ -316,10 +318,17 @@ Membawa 26 plugins WSL (`git docker docker-compose kubectl helm terraform aws gc
 
 ### Instalasi
 ```bash
-sudo dnf install -y zsh git curl util-linux-user
+sudo dnf install -y zsh git curl util-linux-user fzf
 sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
 git clone https://github.com/zsh-users/zsh-autosuggestions ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-autosuggestions
 git clone https://github.com/zsh-users/zsh-syntax-highlighting ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-syntax-highlighting
+
+# fzf-tab standalone (tanpa plugin oh-my-zsh, di-source manual dari .zshrc)
+mkdir -p ~/.local/share/zsh/plugins
+git clone https://github.com/Aloxaf/fzf-tab ~/.local/share/zsh/plugins/fzf-tab
+
+# Bungkam notice "Emulate Docker CLI using podman" dari paket podman-docker
+sudo mkdir -p /etc/containers && sudo touch /etc/containers/nodocker
 
 # mise ke zsh (pengganti nvm; bahasa di-install belakangan via `mise use -g`)
 curl -fsSL https://mise.run/zsh | sh
@@ -332,6 +341,18 @@ Lalu copy `~/.zshrc` dari WSL, pastikan ada aktivasi mise:
 eval "$(mise activate zsh)"
 ```
 Bahasa (node/python/java/go/dotnet) BELUM di-install di sini — pakai `mise` belakangan, misal `mise use -g node@lts python@latest go@latest java@temurin-25`.
+
+> Pola `.zshrc` untuk fzf (standalone, tanpa plugin oh-my-zsh): **jangan** taruh `fzf`/`fzf-tab` di `plugins=(...)`. Source manual sesudah `source $ZSH/oh-my-zsh.sh`:
+> ```zsh
+> if [[ -f /usr/share/fzf/shell/key-bindings.zsh ]]; then
+>   source /usr/share/fzf/shell/completion.zsh
+>   source /usr/share/fzf/shell/key-bindings.zsh
+> elif command -v fzf >/dev/null 2>&1; then
+>   source <(fzf --zsh)
+> fi
+> [[ -f "$HOME/.local/share/zsh/plugins/fzf-tab/fzf-tab.plugin.zsh" ]] && source "$HOME/.local/share/zsh/plugins/fzf-tab/fzf-tab.plugin.zsh"
+> ```
+> `fzf-tab` wajib sesudah `compinit` (sudah jalan via oh-my-zsh). Verifikasi: `fzf --version`, `Ctrl-R`, `cd <Tab>` muncul popup + preview.
 
 ### Verifikasi
 ```bash
